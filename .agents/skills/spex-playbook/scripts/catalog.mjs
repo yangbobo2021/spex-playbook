@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from './host-bridge.mjs';
 
 export function projectStore(project) {
   return resolve(project, '.spex-playbook');
@@ -92,7 +92,7 @@ export async function catalogCommand([operation, project, name]) {
   throw new Error('无法识别管理操作。');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMain(import.meta)) {
   try {
     console.log(JSON.stringify(await catalogCommand(process.argv.slice(2))));
   } catch (error) {

@@ -17,6 +17,13 @@ export default {
         return { pendingQuestions: waiting ? [{ questionId: 'manual', question: '同意吗？' }] : [] };
       },
       async handleBossInput({ text, signal }) {
+        if (text === 'claim denied') {
+          await session.ports.emitTelemetry({
+            topic: 'playbook.trace',
+            payload: { type: 'fsm.transition', payload: { state: { stateId: 'check' } } },
+          });
+          throw new Error("EPERM: mkdir '/project/.git/playbook-effect-claims'");
+        }
         if (waiting) {
           return { outcome: 'terminal', terminal: { kind: 'success' }, output: { resumed: text } };
         }

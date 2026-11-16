@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -49,7 +49,7 @@ async function invoke(script, args, responder = () => { throw new Error('Unexpec
         const reply = { type: 'response', id: event.id, host: { kind: 'current', id: 'node-test' }, result };
         child.stdin.write(JSON.stringify(reply) + '\n');
       }
-      if (event.type === 'result') {
+      if (event.type === 'result' || (event.type === undefined && typeof event.status === 'string')) {
         final = event;
         child.stdin.end();
       }
@@ -141,6 +141,16 @@ test('运行等候答复，可用同一 ID 从新的进程续接', async (t) => 
   const duplicate = await invoke('run.mjs', ['resume', project, runId, '拒绝']);
   assert.equal(duplicate.code, 1);
   assert.match(duplicate.final.error, /未等待/);
+
+  const interrupted = await invoke('run.mjs', ['start', project, '人工复核', 'review?']);
+  const priorProcess = spawn(process.execPath, ['-e', '']);
+  await once(priorProcess, 'close');
+  const directory = join(project, '.spex-playbook', 'runs', interrupted.final.runId);
+  await writeFile(join(directory, 'active'), JSON.stringify({ pid: priorProcess.pid }));
+  const retry = await invoke('run.mjs', ['resume', project, interrupted.final.runId, '同意']);
+  assert.equal(retry.code, 1);
+  assert.match(retry.final.error, /上一轮运行已中断/);
+  assert.equal(JSON.parse(await readFile(join(directory, 'state.json'), 'utf8')).status, 'waiting');
 });
 
 test('缺少输入、歧义名称与 Agent 失败各自可诊断', async (t) => {
@@ -156,4 +166,20 @@ test('缺少输入、歧义名称与 Agent 失败各自可诊断', async (t) => 
   assert.equal(failed.final.step.stateId, 'check');
   assert.equal(failed.final.role, 'checker');
   assert.equal(failed.final.error, 'cannot read CSV');
+  const denied = await invoke('run.mjs', ['start', project, '订单核对', 'claim denied']);
+  assert.equal(denied.code, 1);
+  assert.equal(denied.final.step.stateId, 'check');
+  assert.match(denied.final.error, /Git 工作树协调锁/);
+});
+
+test('安装目录经软链接进入时三个脚本仍执行各自的入口', async (t) => {
+  const project = await sandbox(t);
+  const alias = join(project, 'linked-scripts');
+  await symlink(fileURLToPath(scripts), alias, 'dir');
+  const results = await Promise.all([
+    invoke(join(alias, 'catalog.mjs'), ['locate', project, '不存在']),
+    invoke(join(alias, 'compile.mjs'), ['recompile', project, '不存在', 'text', '规程']),
+    invoke(join(alias, 'run.mjs'), ['start', project, '不存在', '输入']),
+  ]);
+  assert.deepEqual(results.map(({ final }) => final.status), ['not-found', 'not-found', 'not-found']);
 });

@@ -1,7 +1,19 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
+
+export function isMain(meta) {
+  if (meta.main) return true;
+  if (!process.argv[1]) return false;
+  try {
+    return meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
 
 export function emit(message) {
   process.stdout.write(JSON.stringify(message) + '\n');

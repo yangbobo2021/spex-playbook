@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rm, rmdir } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createWorktreeHostCapabilities } from '@sublang/playbook/host-capabilities';
 import { findWorkflow, projectStore, writeJson } from './catalog.mjs';
-import { createHostBridge, emit } from './host-bridge.mjs';
+import { createHostBridge, emit, isMain } from './host-bridge.mjs';
 
 export async function loadRuntime(entryPath, cwd, effectLedger) {
   const { default: entry } = await import(pathToFileURL(entryPath).href);
@@ -76,6 +76,7 @@ function sessionFor(runId, entry, bridge, observe, cwd) {
       },
       async emitTelemetry(event) {
         if (event.topic === 'playbook.trace' && event.payload?.type === 'fsm.transition') {
+          observe.step = event.payload.payload?.state;
           const transition = { type: 'transition', trace: event.payload };
           await bridge.log(transition);
           bridge.output(transition);
@@ -116,15 +117,49 @@ export async function executeTurn({ project, runId, workflow, snapshot, effectLe
     }
     const problem = result.error ?? view?.lastError;
     const failure = {
-      status: 'failed', runId, workflow: workflow.name, step: result.state,
+      status: 'failed', runId, workflow: workflow.name, step: result.state ?? observe.step,
       role: observe.role, description: view?.stateDescription,
-      error: problem?.message ?? problem?.reason ?? '流程未到达结束状态：' + result.outcome,
+      error: describeFailure(problem?.message ?? problem?.reason ?? '流程未到达结束状态：' + result.outcome),
+    };
+    await writeJson(statePath, failure);
+    return failure;
+  } catch (error) {
+    const failure = {
+      status: 'failed', runId, workflow: workflow.name, step: observe.step ?? 'initialize',
+      role: observe.role, error: describeFailure(error.message),
     };
     await writeJson(statePath, failure);
     return failure;
   } finally {
     await runtime.dispose();
   }
+}
+
+function describeFailure(message) {
+  return /(?:EPERM|EACCES|Permission denied).*playbook-effect-claims/i.test(message)
+    ? '当前 Codex 权限无法写入 Playbook 的 Git 工作树协调锁。' + message
+    : message;
+}
+
+async function acquireRun(directory) {
+  const lease = join(directory, 'active');
+  try {
+    await writeFile(lease, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const owner = await readFile(lease, 'utf8').then(JSON.parse).catch(() => undefined);
+    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
+      try {
+        process.kill(owner.pid, 0);
+      } catch (probeError) {
+        if (probeError.code === 'ESRCH') {
+          throw new Error('上一轮运行已中断。请检查该运行是否产生操作后，再发起一次新的运行。运行目录：' + directory);
+        }
+      }
+    }
+    throw new Error('该运行已有进行中的回合。请等待该回合结束。');
+  }
+  return lease;
 }
 
 async function runCommand([operation, location, target, input]) {
@@ -150,8 +185,7 @@ async function runCommand([operation, location, target, input]) {
     await mkdir(dirname(directory), { recursive: true });
     await mkdir(directory);
   }
-  const lease = join(directory, 'active');
-  await mkdir(lease);
+  const lease = await acquireRun(directory);
   let bridge;
   let exchange;
   try {
@@ -171,7 +205,7 @@ async function runCommand([operation, location, target, input]) {
       project, runId, workflow, input, bridge, directory,
       snapshot: previous?.snapshot, effectLedger: previous?.effectLedger, signal: new AbortController().signal,
     }).catch(async (error) => {
-      const failure = { status: 'failed', runId, workflow: workflow.name, error: error.message };
+      const failure = { status: 'failed', runId, workflow: workflow.name, step: 'load', error: describeFailure(error.message) };
       await writeJson(join(directory, 'state.json'), failure);
       return failure;
     });
@@ -183,12 +217,12 @@ async function runCommand([operation, location, target, input]) {
         await rm(exchange, { recursive: true });
       }
     } finally {
-      await rmdir(lease);
+      await unlink(lease);
     }
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMain(import.meta)) {
   try {
     const result = await runCommand(process.argv.slice(2));
     emit({ type: 'result', ...result });

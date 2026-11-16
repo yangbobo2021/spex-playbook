@@ -6,7 +6,7 @@ import {
   createInterpretedExecutor, createPipelineResolver, createReviewingAgent, runSlc, withReservedPipelines,
 } from '@sublang/slc';
 import { findExactWorkflow, findWorkflow, publishWorkflow, workflowDir } from './catalog.mjs';
-import { createHostBridge, emit } from './host-bridge.mjs';
+import { createHostBridge, emit, isMain } from './host-bridge.mjs';
 import { loadRuntime } from './run.mjs';
 
 const modules = fileURLToPath(new URL('../node_modules', import.meta.url));
@@ -105,7 +105,7 @@ async function compileCommand([operation, location, name, sourceKind, source]) {
   });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta)) {
   try {
     const result = await compileCommand(process.argv.slice(2));
     emit({ type: 'result', ...result });
