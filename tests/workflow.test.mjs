@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
@@ -32,7 +32,9 @@ function workflow(name, entry = fixture, generation = 'v1') {
 }
 
 async function invoke(script, args, responder = () => { throw new Error('Unexpected Agent call'); }) {
-  const child = spawn(process.execPath, [fileURLToPath(new URL(script, scripts)), ...args]);
+  const child = spawn(process.execPath, [fileURLToPath(new URL(script, scripts)), ...args], {
+    env: { ...process.env, TMPDIR: args[1] },
+  });
   const closed = once(child, 'close');
   const lines = createInterface({ input: child.stdout });
   let errorOutput = '';
@@ -145,7 +147,7 @@ test('运行等候答复，可用同一 ID 从新的进程续接', async (t) => 
   const interrupted = await invoke('run.mjs', ['start', project, '人工复核', 'review?']);
   const priorProcess = spawn(process.execPath, ['-e', '']);
   await once(priorProcess, 'close');
-  const directory = join(project, '.spex-playbook', 'runs', interrupted.final.runId);
+  const directory = dirname(interrupted.final.record);
   await writeFile(join(directory, 'active'), JSON.stringify({ pid: priorProcess.pid }));
   const retry = await invoke('run.mjs', ['resume', project, interrupted.final.runId, '同意']);
   assert.equal(retry.code, 1);

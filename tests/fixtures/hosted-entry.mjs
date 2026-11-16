@@ -20,9 +20,15 @@ export default {
         if (text === 'claim denied') {
           await session.ports.emitTelemetry({
             topic: 'playbook.trace',
-            payload: { type: 'fsm.transition', payload: { state: { stateId: 'check' } } },
+            payload: { type: 'fsm.transition', payload: {
+              from: 'check', to: 'failed', event: { type: 'xstate.error.actor.0.check' },
+              previousState: { stateId: 'check' }, state: { stateId: 'failed' },
+            } },
           });
-          throw new Error("EPERM: mkdir '/project/.git/playbook-effect-claims'");
+          return {
+            outcome: 'failed', state: { stateId: 'failed' },
+            error: { message: "EPERM: mkdir '/project/.git/playbook-effect-claims'" },
+          };
         }
         if (waiting) {
           return { outcome: 'terminal', terminal: { kind: 'success' }, output: { resumed: text } };

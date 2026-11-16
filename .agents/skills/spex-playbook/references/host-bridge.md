@@ -31,4 +31,4 @@ node "$scripts/run.mjs" resume "$project" "$run_id" "$answer"
 
 续接回合中途退出时，如果运行报告上一轮已中断，先查看运行目录和工作流已经产生的操作，再决定是否发起新运行。
 
-编译请求记录在对应候选产物目录的 `calls.jsonl`。执行请求记录在 `.spex-playbook/runs/<运行 ID>/` 的回合目录下。
+编译请求记录在对应候选产物目录的 `calls.jsonl`。执行结果的 `record` 字段指向本机运行记录。该文件旁的 `turn-*` 目录包含各回合的 `calls.jsonl`。运行记录位于系统临时目录，供当前会话续接和本机核验。

@@ -1,10 +1,10 @@
-import { randomUUID } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, mkdir, mkdtemp, readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createWorktreeHostCapabilities } from '@sublang/playbook/host-capabilities';
-import { findWorkflow, projectStore, writeJson } from './catalog.mjs';
+import { findWorkflow, writeJson } from './catalog.mjs';
 import { createHostBridge, emit, isMain } from './host-bridge.mjs';
 
 export async function loadRuntime(entryPath, cwd, effectLedger) {
@@ -76,7 +76,11 @@ function sessionFor(runId, entry, bridge, observe, cwd) {
       },
       async emitTelemetry(event) {
         if (event.topic === 'playbook.trace' && event.payload?.type === 'fsm.transition') {
-          observe.step = event.payload.payload?.state;
+          const movement = event.payload.payload;
+          observe.step = movement?.state;
+          if (movement?.to === 'failed' || movement?.event?.type?.startsWith('xstate.error.')) {
+            observe.failureStep = movement.previousState ?? movement.from;
+          }
           const transition = { type: 'transition', trace: event.payload };
           await bridge.log(transition);
           bridge.output(transition);
@@ -117,7 +121,7 @@ export async function executeTurn({ project, runId, workflow, snapshot, effectLe
     }
     const problem = result.error ?? view?.lastError;
     const failure = {
-      status: 'failed', runId, workflow: workflow.name, step: result.state ?? observe.step,
+      status: 'failed', runId, workflow: workflow.name, step: observe.failureStep ?? result.state ?? observe.step,
       role: observe.role, description: view?.stateDescription,
       error: describeFailure(problem?.message ?? problem?.reason ?? '流程未到达结束状态：' + result.outcome),
     };
@@ -125,7 +129,7 @@ export async function executeTurn({ project, runId, workflow, snapshot, effectLe
     return failure;
   } catch (error) {
     const failure = {
-      status: 'failed', runId, workflow: workflow.name, step: observe.step ?? 'initialize',
+      status: 'failed', runId, workflow: workflow.name, step: observe.failureStep ?? observe.step ?? 'initialize',
       role: observe.role, error: describeFailure(error.message),
     };
     await writeJson(statePath, failure);
@@ -143,8 +147,10 @@ function describeFailure(message) {
 
 async function acquireRun(directory) {
   const lease = join(directory, 'active');
+  const candidate = lease + '.' + randomUUID();
+  await writeFile(candidate, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
   try {
-    await writeFile(lease, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
+    await link(candidate, lease);
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const owner = await readFile(lease, 'utf8').then(JSON.parse).catch(() => undefined);
@@ -158,6 +164,8 @@ async function acquireRun(directory) {
       }
     }
     throw new Error('该运行已有进行中的回合。请等待该回合结束。');
+  } finally {
+    await unlink(candidate);
   }
   return lease;
 }
@@ -165,7 +173,7 @@ async function acquireRun(directory) {
 async function runCommand([operation, location, target, input]) {
   if (!location || !target) throw new Error('用法：run.mjs <start|resume> <项目目录> <工作流名称或运行 ID> <输入或答复>');
   if (!['start', 'resume'].includes(operation)) throw new Error('无法识别运行操作。');
-  const project = resolve(location);
+  const project = await realpath(resolve(location));
   let workflow;
   let runId;
   if (operation === 'start') {
@@ -180,14 +188,17 @@ async function runCommand([operation, location, target, input]) {
   if (typeof input !== 'string' || !input.trim()) return { status: 'missing-input' };
 
   process.chdir(project);
-  const directory = join(projectStore(project), 'runs', runId);
+  // Keep bookkeeping outside the repository observed by the Playbook runtime.
+  // A later Codex turn on this computer can recover the same run by ID.
+  const projectKey = createHash('sha256').update(project).digest('hex');
+  const sessionRoot = join(tmpdir(), 'spex-playbook-runs-' + (process.getuid?.() ?? 'local'));
+  const directory = join(sessionRoot, projectKey, runId);
   if (operation === 'start') {
-    await mkdir(dirname(directory), { recursive: true });
+    await mkdir(dirname(directory), { recursive: true, mode: 0o700 });
     await mkdir(directory);
   }
   const lease = await acquireRun(directory);
   let bridge;
-  let exchange;
   try {
     let previous;
     if (operation === 'resume') {
@@ -197,11 +208,8 @@ async function runCommand([operation, location, target, input]) {
       }
       workflow = previous.workflow;
     }
-    // The runtime observes the worktree around callbacks. Keep bridge writes
-    // outside it until the turn has finished.
-    exchange = await mkdtemp(join(tmpdir(), 'spex-playbook-turn-'));
-    bridge = await createHostBridge(exchange);
-    return await executeTurn({
+    bridge = await createHostBridge(await mkdtemp(join(directory, 'turn-')));
+    const result = await executeTurn({
       project, runId, workflow, input, bridge, directory,
       snapshot: previous?.snapshot, effectLedger: previous?.effectLedger, signal: new AbortController().signal,
     }).catch(async (error) => {
@@ -209,16 +217,10 @@ async function runCommand([operation, location, target, input]) {
       await writeJson(join(directory, 'state.json'), failure);
       return failure;
     });
+    return { ...result, record: join(directory, 'state.json') };
   } finally {
     bridge?.close();
-    try {
-      if (exchange) {
-        await cp(exchange, join(directory, basename(exchange)), { recursive: true });
-        await rm(exchange, { recursive: true });
-      }
-    } finally {
-      await unlink(lease);
-    }
+    await unlink(lease);
   }
 }
 
