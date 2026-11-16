@@ -1,0 +1,11 @@
+{
+  "name": "spex-playbook-skill",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=23.6.0" },
+  "dependencies": {
+    "@sublang/playbook": "19.0.0",
+    "@sublang/slc": "0.22.0"
+  }
+}

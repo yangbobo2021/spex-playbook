@@ -1,6 +1,6 @@
 # spex-playbook 项目指南
 
-本项目为支持 Skill 的宿主 Agent 提供 SPEX Playbook 工作流的编译、管理和执行入口。当前阶段仅初始化仓库并记录项目约定。
+本项目为支持 Skill 的宿主 Agent 提供 SPEX Playbook 工作流的编译、管理和执行入口。
 
 ## Skill 职责
 
