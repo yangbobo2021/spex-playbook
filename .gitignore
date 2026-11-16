@@ -1,0 +1,4 @@
+node_modules/
+.spex-playbook/
+.acceptance/
+.acceptance-local/
