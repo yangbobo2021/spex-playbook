@@ -228,6 +228,27 @@
 }
 ```
 
+### 原 Git 工作区的定向放行复跑
+
+在前次失败的 Git 工作区中，使用同一个 `live/valid.csv` 和同一个工作流产物 `acdc837c` 复跑。CSV 与仓库的[合规测试样本](../../tests/fixtures/valid.csv)逐字节相同。Codex CLI 版本为 `0.166.0-alpha.5.1`。本次 CLI 调用使用继承 `:workspace` 的一次性权限配置，新增的唯一写权限为实际仓库的 `<repo>/.git/playbook-effect-claims`。Git 仍解析到原仓库的 Git 元数据目录。
+
+实际运行记录依次请求核对员和复核员，状态经过 `ready → checking → reviewing → approved`。CLI 退出码为 `0`。
+
+```json
+{
+  "status": "terminal",
+  "workflow": "订单核对",
+  "outcome": {
+    "stateId": "approved",
+    "kind": "success"
+  },
+  "output": {
+    "status": "通过",
+    "reviewResult": "有效订单数为 3 笔。\n按币种汇总为CNY 13.25，USD 2.50。"
+  }
+}
+```
+
 ## 8. 当前 Codex 宿主与原生子 Agent
 
 以下字段来自桥接请求和原生子会话元数据的关联结果。七个请求均来自同一父会话。核对和复核由两个不同的子会话承担。
